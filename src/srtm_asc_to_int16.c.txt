@@ -1,0 +1,112 @@
+
+/* Convert an srtm asc file as a whole to int16
+ * No error checking is done here for now
+ * Temporary hack for 6 srtm 90m 30° by 30° tiles, 3 wide, 2 high */
+
+#include <inttypes.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+#define NUM_POSTS 36023
+#define MAX_LEN 200
+
+typedef struct header_t {
+	uint32_t num_columns;
+	uint32_t num_rows;
+	double longitude;
+	double latitude;
+	double cellsize;
+	int no_data;
+	// Keep the order or bad things will happen ...
+	char in_filename[50];
+	FILE *file;
+} header_t;
+header_t headers[6];
+
+bool convert_header( const unsigned int i );
+void close_all();
+bool init_headers();
+
+int main(void) {
+	const uint32_t total_rows = 2*NUM_POSTS;
+	const uint32_t total_cols = 3*NUM_POSTS;
+	if( init_headers() ) {
+		const double total_size = (double)(total_rows*total_cols*sizeof(int16_t))/1024.0;
+		printf( "Total rows %u, cols %u, output file size %.2fKiB\n", total_rows, total_cols, total_size );
+		printf( "Starting conversion ...\n" );
+		int16_t one_row[total_cols];
+		int value;
+		// Assuming all files have the same number of posts in width and height !
+		uint32_t index=0;
+		FILE *out_file = fopen( "data/big/asia.int16", "wb" );
+		for( uint32_t row = 0; row < total_rows; ++row ) {
+			if( row >= NUM_POSTS )
+				index = 3;
+			for( uint32_t col = 0; col < total_cols; ++col ) {
+				fscanf( headers[index+(col/NUM_POSTS)].file, "%d", &value );
+				one_row[col] = (int16_t)value;
+			}
+
+			if( 1 != fwrite( &one_row[0], sizeof(one_row), 1, out_file ) )
+				fputs( "Error writing to file data/cut/asia.int16\n", stderr );
+		}
+		fclose(out_file);
+	}
+	close_all();
+	return EXIT_SUCCESS;
+}
+
+bool init_headers() {
+	strncpy( headers[0].in_filename, "data/big/cut_n30e030.asc", 49 );
+	strncpy( headers[1].in_filename, "data/big/cut_n30e060.asc", 49 );
+	strncpy( headers[2].in_filename, "data/big/cut_n30e090.asc", 49 );
+	strncpy( headers[3].in_filename, "data/big/cut_n00e030.asc", 49 );
+	strncpy( headers[4].in_filename, "data/big/cut_n00e060.asc", 49 );
+	strncpy( headers[5].in_filename, "data/big/cut_n00e090.asc", 49 );
+	for( unsigned int i=0; i<6; ++i )
+		if( !convert_header(i) ) {
+			printf( "'%s' error reading header info\n", headers[i].in_filename );
+			return false;
+		}
+	return true;
+}
+
+void close_all() {
+	for( unsigned int i=0; i<6; ++i )
+		if( headers[i].file )
+			fclose( headers[i].file );
+}
+
+bool convert_header( const unsigned int i ) {
+	headers[i].file = fopen( headers[i].in_filename, "r" );
+	if( !headers[i].file ) {
+		fprintf( stderr, "Could not open '%s'\n", headers[i].in_filename );
+		return false;
+	}
+	int res = 0;
+	res += fscanf( headers[i].file, "ncols %u\n", &headers[i].num_columns );
+	res += fscanf( headers[i].file, "nrows %u\n", &headers[i].num_rows );
+	res += fscanf( headers[i].file, "xllcorner %lf\n", &headers[i].longitude );
+	res += fscanf( headers[i].file, "yllcorner %lf\n", &headers[i].latitude );
+	res += fscanf( headers[i].file, "cellsize %lf\n", &headers[i].cellsize );
+	res += fscanf( headers[i].file, "NODATA_value %d\n", &headers[i].no_data );
+	if( 6 != res ) {
+		fprintf( stderr, "Could not read header info from '%s'\n", headers[i].in_filename );
+		return false;
+	}
+	if( NUM_POSTS != headers[i].num_columns || NUM_POSTS != headers[i].num_rows ) {
+		fprintf(
+				stderr, "File '%s': number of rows or columns != NUM_POSTS %u\n", headers[i].in_filename, NUM_POSTS
+		);
+		return false;
+	}
+	printf(
+			"File '%s':\n\tcols/rows: %u/%u\n\tll corner lon/lat: %g/%g\n\tcellsize %g NO DATA %d\n",
+			headers[i].in_filename, headers[i].num_columns, headers[i].num_rows, headers[i].longitude,
+			headers[i].latitude, headers[i].cellsize, headers[i].no_data
+	);
+	return true;
+}

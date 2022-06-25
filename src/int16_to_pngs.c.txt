@@ -1,0 +1,119 @@
+
+/* Convert a previously created int16-file to a set of png image tiles
+ * with given size, power of 2 for use as a heightmap. */
+
+#include <inttypes.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <tgmath.h>
+#include <stdbool.h>
+#include <png.h>
+
+#define MAX_LEN 200
+
+void write_png_image( uint16_t **image_data, const uint32_t tilesize, const uint32_t tile );
+
+int main(void) {
+	const char in_filename[] = "data/big/asia.int16";
+	// @todo this should be taken from a header info file
+	const uint32_t tilesize = 8192;
+	const uint32_t num_rows = 72046;
+	const uint32_t num_columns = 108069;
+	const int no_data = -9999;
+	FILE *in_file = fopen( in_filename, "rb" );
+	if( !in_file )
+		return EXIT_FAILURE;
+	printf(
+			"Starting conversion of '%s', columns %u, rows %u, tilesize %u\n",
+			in_filename, num_columns, num_rows, tilesize
+	);
+	// Convert images
+	// Fillet the map into tiles starting at row/col
+	const uint32_t num_h_tiles = (uint32_t)floor((float)num_columns/(float)tilesize);
+	const uint32_t num_v_tiles = (uint32_t)floor((float)num_rows/(float)tilesize);
+	printf( "Number of tiles horizontal/vertical: %d/%d\n", num_h_tiles, num_v_tiles );
+	const uint32_t num_tiles = num_h_tiles * num_v_tiles;
+	uint32_t start_row[num_tiles];
+	uint32_t start_col[num_tiles];
+	uint32_t idx=0;
+	for( uint32_t row = 0; row < num_v_tiles; ++row ) {
+		for( uint32_t col = 0; col < num_h_tiles; ++col ) {
+			// @todo is this right ? Or better 1 overlap ?
+			start_row[idx] = row*tilesize;
+			start_col[idx] = col*tilesize;
+			printf("\tTile %d, starting at col/row %d/%d\n", idx, start_col[idx], start_row[idx] );
+			++idx;
+		}
+	}
+	uint16_t **out_image[num_h_tiles];
+	for( unsigned int i=0; i<num_h_tiles; ++i ) {
+		out_image[i] = malloc(sizeof(uint16_t*)*tilesize);
+		for( uint32_t row = 0; row < tilesize; ++row )
+			out_image[i][row] = malloc(sizeof(uint16_t)*tilesize);
+	}
+	int16_t one_line[num_columns];
+	const uint32_t max_col = num_h_tiles*tilesize;
+	for( uint16_t v_tile=0; v_tile<1/*num_v_tiles*/; ++v_tile ) {
+		uint32_t start_idx = v_tile*num_h_tiles;
+		printf( "tile: %u; start: %u/%u\n", idx, start_row[idx], start_col[idx] );
+		for( uint32_t row=0; row<tilesize; ++row ) {
+			if( 1 != fread( one_line, sizeof(one_line), 1, in_file ) )
+				fprintf( stderr, "Error reading data from '%s'\n", in_filename );
+			else {
+				for( uint32_t col=0; col<max_col; ++col ) {
+					const int16_t value = one_line[col];
+					// Integer division, determine tile index and position
+					const uint32_t idx = start_idx + (col/tilesize);
+					const uint32_t image_col = col-start_col[idx];
+					const uint32_t image_row = row-start_row[idx];
+					//out_image[idx][image_col][image_row] = value < 0 || value == no_data ? 0 : (uint16_t)value*10;
+				}
+			}
+		}
+		for( uint32_t i=0; i<num_h_tiles; ++i )
+			write_png_image( out_image[i], tilesize, i );
+	}
+	// cleanup
+	for( unsigned int i=0; i<num_h_tiles; ++i ) {
+		for( uint32_t row = 0; row < tilesize; ++row )
+			free(out_image[i][row]);
+		free(out_image[i]);
+	}
+	fclose(in_file);
+	puts("Converter ending");
+	return EXIT_SUCCESS;
+}
+
+void write_png_image( uint16_t **image_data, const uint32_t tilesize, const uint32_t tile ) {
+	char filename[30];
+	snprintf( filename, 29, "tile_%05u_%03u.png", tilesize, tile );
+	// print writing image x of y
+	printf( "Writing tile image file '%s'\n", filename );
+	png_structp png_stru = png_create_write_struct( PNG_LIBPNG_VER_STRING, NULL, NULL, NULL );
+	if( !png_stru ) {
+		fputs( "Error creating png struct", stderr );
+		return;
+	}
+	png_infop png_inf = png_create_info_struct( png_stru );
+	if( !png_inf ) {
+		fputs( "Error creating png info struct", stderr );
+		png_destroy_write_struct( &png_stru, &png_inf );
+		return;
+	}
+	FILE *image_file = fopen( filename, "wb" );
+	png_init_io( png_stru, image_file );
+	png_set_IHDR(
+			png_stru, png_inf, tilesize, tilesize, 16, PNG_COLOR_TYPE_GRAY,
+			PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT
+	);
+	png_write_info( png_stru, png_inf );
+	// Mind endianess
+	png_set_swap( png_stru );
+	for( uint32_t i = 0; i < tilesize; ++i )
+		png_write_row( png_stru, (png_const_bytep)&image_data[i][0] );
+	png_write_end( png_stru, png_inf );
+	//png_destroy_write_struct( &png_stru, (png_infopp)NULL );
+	png_destroy_write_struct( &png_stru, &png_inf );
+	fclose(image_file);
+}
